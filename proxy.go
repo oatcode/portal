@@ -1,3 +1,4 @@
+// Package portal provides ability to build a 2-node HTTP tunnel
 package portal
 
 import (
@@ -28,7 +29,7 @@ Command line:
 
 Build with:
   protoc -I . message.proto --go_out=plugins=grpc:.
-  go build
+   install ./...
 
 Appreviations used in code:
 ich = tunnel input channel
@@ -328,7 +329,8 @@ func tunnelReader(c net.Conn, ich chan<- *Message) {
 	}
 }
 
-// TunnelServe is to start communication with the remote side with tunnel messages
+// TunnelServe starts the communication with the remote side with tunnel messages connection c.
+// It handles new proxy connections coming into connection channel cch.
 func TunnelServe(c net.Conn, cch <-chan net.Conn) {
 	ich := make(chan *Message)
 	och := make(chan *Message)
@@ -360,7 +362,7 @@ func logf(fmt string, v ...interface{}) {
 	}
 }
 
-// SetPrintf is to set a printf logger for info and error messages
+// SetPrintf sets a printf logger for info and error messages
 func SetPrintf(l func(string, ...interface{})) {
 	loggerf = l
 }

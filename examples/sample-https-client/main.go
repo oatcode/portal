@@ -1,7 +1,3 @@
-/*
-sample-http-client -url https://localhost:10003/tt/ -trust server.crt -proxy http://localhost:10002
-*/
-
 package main
 
 import (

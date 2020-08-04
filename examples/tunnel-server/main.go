@@ -1,9 +1,3 @@
-/*
-openssl req -x509 -nodes -newkey rsa:2048 -sha256 -keyout server.key -out server.crt -subj "/C=US/ST=California/L=San Jose/O=Example/OU=Developer/CN=localhost"
-openssl req -x509 -nodes -newkey rsa:2048 -sha256 -keyout client.key -out client.crt -subj "/C=US/ST=California/L=San Jose/O=Example/OU=Developer/CN=client"
-
-tunnel-server -address :10001 -proxy :10002 -cert server.crt -key server.key -trust client.crt
-*/
 package main
 
 import (

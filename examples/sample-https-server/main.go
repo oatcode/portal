@@ -1,6 +1,3 @@
-/*
-sample-http-server -address :10003 -cert server.crt -key server.key
-*/
 package main
 
 import (
