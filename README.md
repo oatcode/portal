@@ -28,6 +28,45 @@ where cch is the channel to handle incoming proxy connection
 
 Included in the projects are example code to establish a TLS tunnel and make HTTPS connection through it.
 
+                   +---------+
+                   |         |
+                   | Cloud   |
+                   | Client  |
+                   |         |
+                   +----+----+
+                        |
+                        |
+                +-------v-------+
+                |               |
+                | Proxy Server  |
+                |               |
+                +---------------+
+                |               |
+                | Tunnel Server |
+                |               |
+                +-----+---^-----+
+                      |   |
+                      |   |
+     Internet         |   |
+    ------------------+---+--------------------
+     On-prem          |   |
+                      |   |
+                      |   |
+                +-----v---+-----+
+                |               |
+                | Tunnel Client |
+                |               |
+                +-------+-------+
+                        |
+                        |
+                   +----v----+
+                   |         |
+                   | On-prem |
+                   | Server  |
+                   |         |
+                   +---------+
+
+
 To run the examples locally, create certificates for tunnel and https server:
 
     openssl req -x509 -nodes -newkey rsa:2048 -sha256 -keyout tunnel-server.key -out tunnel-server.crt -subj "/C=US/ST=CA/L=SJC/O=Example/OU=Dev/CN=localhost"
