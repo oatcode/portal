@@ -29,29 +29,19 @@ where cch is the channel to handle incoming proxy connection
 Included in the projects are example code to establish a TLS tunnel and make HTTPS connection through it.
 
                    +---------+
-                   |         |
                    | Cloud   |
                    | Client  |
-                   |         |
                    +----+----+
                         |
                         |
                 +-------v-------+
-                |               |
                 | Proxy Server  |
-                |               |
                 +---------------+
-                |               |
                 | Tunnel Server |
-                |               |
                 +-----+---^-----+
-                      |   |
-                      |   |
      Internet         |   |
     ------------------+---+--------------------
      On-prem          |   |
-                      |   |
-                      |   |
                 +-----v---+-----+
                 |               |
                 | Tunnel Client |
@@ -60,10 +50,8 @@ Included in the projects are example code to establish a TLS tunnel and make HTT
                         |
                         |
                    +----v----+
-                   |         |
                    | On-prem |
                    | Server  |
-                   |         |
                    +---------+
 
 
