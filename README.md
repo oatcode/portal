@@ -1,5 +1,8 @@
 # Portal
 
+[![Release](https://img.shields.io/github/v/release/oatcode/portal)](https://github.com/oatcode/portal/releases)
+
+
 A Go implementation of HTTP tunneling through a tunnel
 
 ## Overview
