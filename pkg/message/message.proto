@@ -1,6 +1,8 @@
 syntax = "proto3";
 
-package portal;
+package message;
+
+option go_package = "pkg/message";
 
 message Message {
     enum Type {
