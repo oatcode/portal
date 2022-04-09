@@ -1,5 +1,5 @@
 module github.com/oatcode/portal
 
-go 1.13
+go 1.16
 
-require github.com/golang/protobuf v1.4.2
+require github.com/golang/protobuf v1.5.2
