@@ -57,6 +57,6 @@ func main() {
 
 	tlsConfig := loadCert(certFile, keyFile, trustFile)
 
-	portal.SetPrintf(log.Printf)
+	portal.Logf = log.Printf
 	tunnelDialAndServe(address, tlsConfig)
 }
