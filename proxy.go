@@ -77,8 +77,8 @@ Note
 - TODO TRY: without origin, but data_origin/data_remote?
 */
 
-// Like a printf
-var loggerf func(string, ...interface{})
+// Logf is for setting logging function
+var Logf func(string, ...interface{})
 
 func proxyWriter(c net.Conn, pch <-chan *message.Message) {
 	logf("proxyWriter starts. conn=%s", connString(c))
@@ -358,12 +358,7 @@ func connString(c net.Conn) string {
 }
 
 func logf(fmt string, v ...interface{}) {
-	if loggerf != nil {
-		loggerf(fmt, v)
+	if Logf != nil {
+		Logf(fmt, v)
 	}
-}
-
-// SetPrintf sets a printf logger for info and error messages
-func SetPrintf(l func(string, ...interface{})) {
-	loggerf = l
 }

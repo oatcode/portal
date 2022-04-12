@@ -87,7 +87,7 @@ func main() {
 
 	tlsConfig := loadCert(certFile, keyFile, trustFile)
 
-	portal.SetPrintf(log.Printf)
+	portal.Logf = log.Printf
 
 	cch := make(chan net.Conn)
 	go proxyListenAndServe(proxy, cch)
