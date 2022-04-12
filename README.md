@@ -60,9 +60,9 @@ Included in the projects are example code to establish a TLS tunnel and make HTT
 
 To run the examples locally, create certificates for tunnel and https server:
 
-    openssl req -x509 -nodes -newkey rsa:2048 -sha256 -keyout tunnel-server.key -out tunnel-server.crt -subj "/C=US/ST=CA/L=SJC/O=Example/OU=Dev/CN=localhost"
-    openssl req -x509 -nodes -newkey rsa:2048 -sha256 -keyout tunnel-client.key -out tunnel-client.crt -subj "/C=US/ST=CA/L=SJC/O=Example/OU=Dev/CN=client"
-    openssl req -x509 -nodes -newkey rsa:2048 -sha256 -keyout https-server.key -out https-server.crt -subj "/C=US/ST=CA/L=SJC/O=Example/OU=Dev/CN=localhost"
+    openssl req -x509 -nodes -newkey rsa:2048 -sha256 -keyout tunnel-server.key -out tunnel-server.crt -subj "/C=US/CN=tunnel-server" -extensions SAN -config <(cat /etc/ssl/openssl.cnf  <(printf "\n[SAN]\nsubjectAltName=DNS:localhost\n"))
+    openssl req -x509 -nodes -newkey rsa:2048 -sha256 -keyout tunnel-client.key -out tunnel-client.crt -subj "/C=US/CN=tunnel-client" -extensions SAN -config <(cat /etc/ssl/openssl.cnf  <(printf "\n[SAN]\nsubjectAltName=DNS:localhost\n"))
+    openssl req -x509 -nodes -newkey rsa:2048 -sha256 -keyout https-server.key -out https-server.crt -subj "/C=US/CN=https-server" -extensions SAN -config <(cat /etc/ssl/openssl.cnf  <(printf "\n[SAN]\nsubjectAltName=DNS:localhost\n"))
 
 Run TLS tunnel client and server on port 10001, where proxy is on the TLS tunnel server side on port 10002:
 
