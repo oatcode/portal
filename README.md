@@ -1,5 +1,6 @@
 # Portal
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/oatcode/portal.svg)](https://pkg.go.dev/github.com/oatcode/portal)
 [![Release](https://img.shields.io/github/v/release/oatcode/portal)](https://github.com/oatcode/portal/releases)
 
 
