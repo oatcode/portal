@@ -7,6 +7,8 @@ import (
 	fmt "fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -77,29 +79,40 @@ Note
 - TODO TRY: without origin, but data_origin/data_remote?
 */
 
-// Logf is for setting logging function
-var Logf func(string, ...interface{})
+type connectOperation struct {
+	c       net.Conn
+	address string
+}
+
+var (
+	// Logf is for setting logging function
+	Logf func(string, ...interface{})
+
+	// Filter is for filtering HTTP CONNECT requests
+	Filter func(http.Request) bool
+
+	// ConnectTimeout is for timing out HTTP CONNECT
+	ConnectTimeout = 5 * time.Second
+)
 
 func proxyWriter(c net.Conn, pch <-chan *message.Message) {
 	logf("proxyWriter starts. conn=%s", connString(c))
+	defer c.Close()
 	for co := range pch {
 		if co.Type == message.Message_HTTP_CONNECT_OK {
 			c.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
 			logf("proxyWriter connected. conn=%s", connString(c))
 		} else if co.Type == message.Message_HTTP_SERVICE_UNAVAILABLE {
 			c.Write([]byte("HTTP/1.1 503 Service Unavailable\r\n\r\n"))
-			c.Close()
 			logf("proxyWriter service unavailable. conn=%s", connString(c))
 			return
 		} else if co.Type == message.Message_DISCONNECTED {
-			c.Close()
 			logf("proxyWriter disconnected. conn=%s", connString(c))
 			return
 		} else if co.Type == message.Message_DATA {
 			c.Write(co.Buf)
 		}
 	}
-	c.Close()
 	logf("proxyWriter channel closed. conn=%s", connString(c))
 }
 
@@ -138,45 +151,74 @@ func proxyReader(c net.Conn, och chan<- *message.Message, id int32, origin messa
 }
 
 // Process HTTP CONNECT
-func proxyConnect(c net.Conn, och chan<- *message.Message, id int32) {
-	logf("proxyConnect connecting. conn=%s", connString(c))
+func proxyConnect(cch <-chan net.Conn, coch chan<- connectOperation) {
+	for c := range cch {
+		// Set timeout to read the HTTP CONNECT message
+		c.SetReadDeadline(time.Now().Add(ConnectTimeout))
 
-	// Set timeout to read the HTTP CONNECT message
-	c.SetReadDeadline(time.Now().Add(5 * time.Second))
-
-	// Read first line
-	bufReader := bufio.NewReader(c)
-	first, err := bufReader.ReadString('\n')
-	if err != nil {
-		logf("HTTP CONNECT first line: %v", err)
-		c.Close()
-		return
-	}
-
-	// Read subsequence lines
-	for {
-		line, err := bufReader.ReadString('\n')
+		// Read request line
+		bufReader := bufio.NewReader(c)
+		first, err := bufReader.ReadString('\n')
 		if err != nil {
-			logf("HTTP CONNECT subsequence lines: %v", err)
+			logf("Proxy request read error: %v", err)
 			c.Close()
-			return
+			continue
 		}
-		if len(line) == 2 {
-			break
+
+		// Process request line
+		tokens := strings.Split(first, " ")
+		if len(tokens) != 3 {
+			c.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+			c.Close()
+			continue
 		}
-	}
+		method, address := tokens[0], tokens[1]
 
-	// Reset timeout
-	c.SetReadDeadline(time.Time{})
+		if method != http.MethodConnect {
+			c.Write([]byte("HTTP/1.1 405 Method Not Allowed\r\n\r\n"))
+			c.Close()
+			continue
+		}
 
-	// Use first line
-	tokens := strings.Split(first, " ")
-	co := &message.Message{
-		Type:          message.Message_HTTP_CONNECT,
-		Id:            id,
-		SocketAddress: tokens[1],
+		req := http.Request{
+			Method: http.MethodConnect,
+			URL:    &url.URL{Host: address},
+			Header: make(http.Header),
+		}
+		// Read headers
+		for {
+			line, err := bufReader.ReadString('\n')
+			if err != nil {
+				logf("Proxy headers error: %v", err)
+				c.Close()
+				continue
+			}
+			if len(line) == 2 {
+				// Only \r\n
+				break
+			}
+			tokens := strings.SplitN(line, ":", 2)
+			if len(tokens) == 2 {
+				name := tokens[0]
+				value := strings.Trim(tokens[1], " \r\n")
+				req.Header.Add(name, value)
+			}
+		}
+
+		// Authorize
+		if Filter != nil {
+			if !Filter(req) {
+				c.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\n\r\n"))
+				c.Close()
+				continue
+			}
+		}
+
+		// Reset timeout
+		c.SetReadDeadline(time.Time{})
+
+		coch <- connectOperation{c: c, address: address}
 	}
-	och <- co
 }
 
 func proxyConnector(sa string, och chan<- *message.Message, pch <-chan *message.Message, id int32) {
@@ -208,7 +250,7 @@ func proxyConnector(sa string, och chan<- *message.Message, pch <-chan *message.
 //   rm is remote channel map
 // Connection map is only used until connection is connected
 //   lcm is local connection map
-func mapper(ich <-chan *message.Message, cch <-chan net.Conn, och chan<- *message.Message) {
+func mapper(ich <-chan *message.Message, coch <-chan connectOperation, och chan<- *message.Message) {
 	var id int32
 	lm := make(map[int32]chan<- *message.Message)
 	rm := make(map[int32]chan<- *message.Message)
@@ -216,7 +258,7 @@ func mapper(ich <-chan *message.Message, cch <-chan net.Conn, och chan<- *messag
 
 	for {
 		select {
-		case co, ok := <-ich:
+		case i, ok := <-ich:
 			if !ok {
 				// Channel closed. Clear connections
 				for _, ch := range lm {
@@ -228,45 +270,50 @@ func mapper(ich <-chan *message.Message, cch <-chan net.Conn, och chan<- *messag
 				return
 			}
 			// From remote
-			if co.Type == message.Message_HTTP_CONNECT {
+			if i.Type == message.Message_HTTP_CONNECT {
 				// Remote initiated
 				pch := make(chan *message.Message)
-				rm[co.Id] = pch
-				go proxyConnector(co.SocketAddress, och, pch, co.Id)
-			} else if co.Type == message.Message_HTTP_CONNECT_OK {
+				rm[i.Id] = pch
+				go proxyConnector(i.SocketAddress, och, pch, i.Id)
+			} else if i.Type == message.Message_HTTP_CONNECT_OK {
 				// Local initiated
-				c := lcm[co.Id]
-				delete(lcm, co.Id)
-				go proxyReader(c, och, co.Id, message.Message_ORIGIN_LOCAL)
-				pch := lm[co.Id]
-				pch <- co
-			} else if co.Type == message.Message_HTTP_SERVICE_UNAVAILABLE {
+				c := lcm[i.Id]
+				delete(lcm, i.Id)
+				go proxyReader(c, och, i.Id, message.Message_ORIGIN_LOCAL)
+				pch := lm[i.Id]
+				pch <- i
+			} else if i.Type == message.Message_HTTP_SERVICE_UNAVAILABLE {
 				// Local initiated
-				delete(lcm, co.Id)
-				pch := lm[co.Id]
-				delete(lm, co.Id)
-				pch <- co
+				delete(lcm, i.Id)
+				pch := lm[i.Id]
+				delete(lm, i.Id)
+				pch <- i
 			} else {
 				var m map[int32]chan<- *message.Message
-				if co.Origin == message.Message_ORIGIN_LOCAL {
+				if i.Origin == message.Message_ORIGIN_LOCAL {
 					// Received from other side with local origin. Use remote map
 					m = rm
 				} else {
 					m = lm
 				}
-				pch := m[co.Id]
-				if co.Type == message.Message_DISCONNECTED {
-					delete(m, co.Id)
+				pch := m[i.Id]
+				if i.Type == message.Message_DISCONNECTED {
+					delete(m, i.Id)
 				}
-				pch <- co
+				pch <- i
 			}
-		case c := <-cch:
+		case co := <-coch:
 			// New connection from local
-			lcm[id] = c
+			lcm[id] = co.c
 			pch := make(chan *message.Message)
 			lm[id] = pch
-			go proxyWriter(c, pch)
-			go proxyConnect(c, och, id)
+			go proxyWriter(co.c, pch)
+
+			och <- &message.Message{
+				Type:          message.Message_HTTP_CONNECT,
+				Id:            id,
+				SocketAddress: co.address,
+			}
 			id++
 		}
 	}
@@ -336,8 +383,10 @@ func TunnelServe(c net.Conn, cch <-chan net.Conn) {
 	ich := make(chan *message.Message)
 	och := make(chan *message.Message)
 	stop := make(chan struct{})
+	coch := make(chan connectOperation)
 
-	go mapper(ich, cch, och)
+	go proxyConnect(cch, coch)
+	go mapper(ich, coch, och)
 	go tunnelWriter(c, och, stop)
 	// This blocks until connection closed
 	tunnelReader(c, ich)
