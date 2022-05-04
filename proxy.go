@@ -3,6 +3,7 @@ package portal
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	fmt "fmt"
 	"io"
@@ -84,6 +85,12 @@ type connectOperation struct {
 	address string
 }
 
+type key int
+
+const (
+	connectKey key = iota
+)
+
 var (
 	// Logf is for setting logging function
 	Logf func(string, ...interface{})
@@ -97,7 +104,10 @@ var (
 
 func proxyWriter(c net.Conn, pch <-chan *message.Message) {
 	logf("proxyWriter starts. conn=%s", connString(c))
-	defer c.Close()
+	defer func() {
+		logf("proxyWriter ends. conn=%s", connString(c))
+		c.Close()
+	}()
 	for co := range pch {
 		if co.Type == message.Message_HTTP_CONNECT_OK {
 			c.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
@@ -113,12 +123,12 @@ func proxyWriter(c net.Conn, pch <-chan *message.Message) {
 			c.Write(co.Buf)
 		}
 	}
-	logf("proxyWriter channel closed. conn=%s", connString(c))
 }
 
 // proxyReader uses the origin to denote if it is handling a local initiated connection or a remote one
 func proxyReader(c net.Conn, och chan<- *message.Message, id int32, origin message.Message_Origin) {
 	logf("proxyReader starts. conn=%s", connString(c))
+	defer logf("proxyReader ends. conn=%s", connString(c))
 	for {
 		buf := make([]byte, 2048)
 		len, err := c.Read(buf)
@@ -151,73 +161,81 @@ func proxyReader(c net.Conn, och chan<- *message.Message, id int32, origin messa
 }
 
 // Process HTTP CONNECT
-func proxyConnect(cch <-chan net.Conn, coch chan<- connectOperation) {
-	for c := range cch {
-		// Set timeout to read the HTTP CONNECT message
-		c.SetReadDeadline(time.Now().Add(ConnectTimeout))
+func proxyConnect(ctx context.Context, cch <-chan net.Conn, coch chan<- connectOperation) {
+	logf("proxyConnect starts. conn=%s", ctx.Value(connectKey))
+	defer logf("proxyConnect ends. conn=%s", ctx.Value(connectKey))
+	for {
+		select {
+		case c := <-cch:
+			// Set timeout to read the HTTP CONNECT message
+			c.SetReadDeadline(time.Now().Add(ConnectTimeout))
 
-		// Read request line
-		bufReader := bufio.NewReader(c)
-		first, err := bufReader.ReadString('\n')
-		if err != nil {
-			logf("Proxy request read error: %v", err)
-			c.Close()
-			continue
-		}
-
-		// Process request line
-		tokens := strings.Split(first, " ")
-		if len(tokens) != 3 {
-			c.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
-			c.Close()
-			continue
-		}
-		method, address := tokens[0], tokens[1]
-
-		if method != http.MethodConnect {
-			c.Write([]byte("HTTP/1.1 405 Method Not Allowed\r\n\r\n"))
-			c.Close()
-			continue
-		}
-
-		req := http.Request{
-			Method: http.MethodConnect,
-			URL:    &url.URL{Host: address},
-			Header: make(http.Header),
-		}
-		// Read headers
-		for {
-			line, err := bufReader.ReadString('\n')
+			// Read request line
+			bufReader := bufio.NewReader(c)
+			first, err := bufReader.ReadString('\n')
 			if err != nil {
-				logf("Proxy headers error: %v", err)
+				logf("Proxy request read error: %v", err)
 				c.Close()
 				continue
 			}
-			if len(line) == 2 {
-				// Only \r\n
-				break
-			}
-			tokens := strings.SplitN(line, ":", 2)
-			if len(tokens) == 2 {
-				name := tokens[0]
-				value := strings.Trim(tokens[1], " \r\n")
-				req.Header.Add(name, value)
-			}
-		}
 
-		// Authorize
-		if Filter != nil {
-			if !Filter(req) {
-				c.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\n\r\n"))
+			// Process request line
+			tokens := strings.Split(first, " ")
+			if len(tokens) != 3 {
+				c.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
 				c.Close()
 				continue
 			}
+			method, address := tokens[0], tokens[1]
+
+			if method != http.MethodConnect {
+				c.Write([]byte("HTTP/1.1 405 Method Not Allowed\r\n\r\n"))
+				c.Close()
+				continue
+			}
+
+			req := http.Request{
+				Method: http.MethodConnect,
+				URL:    &url.URL{Host: address},
+				Header: make(http.Header),
+			}
+			// Read headers
+			for {
+				line, err := bufReader.ReadString('\n')
+				if err != nil {
+					logf("Proxy headers error: %v", err)
+					c.Close()
+					continue
+				}
+				if len(line) == 2 {
+					// Only \r\n
+					break
+				}
+				tokens := strings.SplitN(line, ":", 2)
+				if len(tokens) == 2 {
+					name := tokens[0]
+					value := strings.Trim(tokens[1], " \r\n")
+					req.Header.Add(name, value)
+				}
+			}
+
+			// Authorize
+			if Filter != nil {
+				if !Filter(req) {
+					c.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\n\r\n"))
+					c.Close()
+					continue
+				}
+			}
+
+			// Reset timeout
+			c.SetReadDeadline(time.Time{})
+
+			coch <- connectOperation{c: c, address: address}
+
+		case <-ctx.Done():
+			return
 		}
-
-		// Reset timeout
-		c.SetReadDeadline(time.Time{})
-
-		coch <- connectOperation{c: c, address: address}
 	}
 }
 
@@ -251,6 +269,9 @@ func proxyConnector(sa string, och chan<- *message.Message, pch <-chan *message.
 // Connection map is only used until connection is connected
 //   lcm is local connection map
 func mapper(ich <-chan *message.Message, coch <-chan connectOperation, och chan<- *message.Message) {
+	logf("mapper starts")
+	defer logf("mapper ends")
+
 	var id int32
 	lm := make(map[int32]chan<- *message.Message)
 	rm := make(map[int32]chan<- *message.Message)
@@ -320,31 +341,28 @@ func mapper(ich <-chan *message.Message, coch <-chan connectOperation, och chan<
 }
 
 // Send data to the other side of the tunnel
-func tunnelWriter(c net.Conn, och <-chan *message.Message, stop <-chan struct{}) {
+func tunnelWriter(ctx context.Context, c net.Conn, och <-chan *message.Message) {
 	logf("tunnelWriter starts. conn=%s", connString(c))
-	var err error
-OutterLoop:
+	defer logf("tunnelWriter ends. conn=%s", connString(c))
 	for {
 		select {
 		case co := <-och:
 			var data []byte
-			data, err = proto.Marshal(co)
+			data, err := proto.Marshal(co)
 			if err != nil {
-				break OutterLoop
+				logf("tunnelWriter error. conn=%s err=%v", connString(c), err)
+				return
 			}
 			dl := int32(len(data))
 			if err = binary.Write(c, binary.LittleEndian, dl); err != nil {
-				break OutterLoop
+				logf("tunnelWriter error. conn=%s err=%v", connString(c), err)
+				return
 			}
 			c.Write(data)
-		case <-stop:
-			break OutterLoop
+		case <-ctx.Done():
+			return
 		}
 	}
-	if err != nil {
-		logf("tunnelWriter error. conn=%s err=%v", connString(c), err)
-	}
-	logf("tunnelWriter ends. conn=%s", connString(c))
 }
 
 // Read commands comming from the other side of the tunnel
@@ -380,26 +398,25 @@ func tunnelReader(c net.Conn, ich chan<- *message.Message) {
 // TunnelServe starts the communication with the remote side with tunnel messages connection c.
 // It handles new proxy connections coming into connection channel cch.
 func TunnelServe(c net.Conn, cch <-chan net.Conn) {
+	logf("TunnelServe starts. conn=%s", connString(c))
+	defer logf("TunnelServe ends. conn=%s", connString(c))
+
 	ich := make(chan *message.Message)
 	och := make(chan *message.Message)
-	stop := make(chan struct{})
 	coch := make(chan connectOperation)
 
-	go proxyConnect(cch, coch)
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), connectKey, connString(c)))
+	defer cancel()
+
+	go proxyConnect(ctx, cch, coch)
 	go mapper(ich, coch, och)
-	go tunnelWriter(c, och, stop)
+	go tunnelWriter(ctx, c, och)
 	// This blocks until connection closed
 	tunnelReader(c, ich)
 
-	// Reader closed means socket closed.
-	// Stop writer so it won't write to closed socket anymore
-	close(stop)
-
-	// Close ich to trigger mapper to close all proxyWriters,
-	// while proxyWriters close socket will stop proxyReaders
 	close(ich)
-
-	// Don't close och, as proxyReaders may still use it. Let GC takes care of it.
+	// Don't close och, as mapper may still use it. Let GC takes care of it.
+	// Don't close coch, as proxyConnect may still use it. Let GC takes care of it.
 }
 
 func connString(c net.Conn) string {
@@ -408,6 +425,6 @@ func connString(c net.Conn) string {
 
 func logf(fmt string, v ...interface{}) {
 	if Logf != nil {
-		Logf(fmt, v)
+		Logf(fmt, v...)
 	}
 }
