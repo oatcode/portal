@@ -18,7 +18,6 @@ func proxyListenAndServe(address string, cch chan<- net.Conn) {
 	if err != nil {
 		log.Fatal("Listen: ", err)
 	}
-	defer l.Close()
 	for {
 		c, err := l.Accept()
 		if err != nil {
@@ -35,16 +34,13 @@ func tunnelListenAndServe(address string, tlsConfig *tls.Config, cch <-chan net.
 	if err != nil {
 		log.Fatal("Listen: ", err)
 	}
-	defer l.Close()
 	for {
 		c, err := l.Accept()
 		if err != nil {
 			log.Fatal("Accept: ", err)
 		}
-		defer c.Close()
 		log.Printf("Tunnel server connected. conn=%s", connString(c))
-		// Serve one client connection at a time. This blocks until finish.
-		portal.TunnelServe(c, cch)
+		go portal.TunnelServe(c, cch)
 	}
 }
 

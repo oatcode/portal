@@ -166,7 +166,11 @@ func proxyConnect(ctx context.Context, cch <-chan net.Conn, coch chan<- connectO
 	defer logf("proxyConnect ends. conn=%s", ctx.Value(connectKey))
 	for {
 		select {
-		case c := <-cch:
+		case c, ok := <-cch:
+			if !ok {
+				logf("proxyConnect channel closed. conn=%s", ctx.Value(connectKey))
+				return
+			}
 			// Set timeout to read the HTTP CONNECT message
 			c.SetReadDeadline(time.Now().Add(ConnectTimeout))
 
@@ -346,7 +350,10 @@ func tunnelWriter(ctx context.Context, c net.Conn, och <-chan *message.Message) 
 	defer logf("tunnelWriter ends. conn=%s", connString(c))
 	for {
 		select {
-		case co := <-och:
+		case co, ok := <-och:
+			if !ok {
+				logf("tunnelWriter channel closed. conn=%s", connString(c))
+			}
 			var data []byte
 			data, err := proto.Marshal(co)
 			if err != nil {
