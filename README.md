@@ -67,13 +67,13 @@ To run the examples locally, create certificates for tunnel and https server:
 
 Run TLS tunnel client and server on port 10001, where proxy is on the TLS tunnel server side on port 10002:
 
-    tunnel-server -address :10001 -proxy :10002 -cert tunnel-server.crt -key tunnel-server.key -trust tunnel-client.crt
+    tunnel-server -address :10001 -proxy :10002 -proxyUsername user1 -proxyPassword password1 -cert tunnel-server.crt -key tunnel-server.key -trust tunnel-client.crt
     tunnel-client -address localhost:10001 -cert tunnel-client.crt -key tunnel-client.key -trust tunnel-server.crt
 
 Run HTTPS client and server on port 10003
 
     sample-https-server -address :10003 -cert https-server.crt -key https-server.key
-    sample-https-client -proxy http://localhost:10002 -url https://localhost:10003/test -trust https-server.crt 
+    sample-https-client -proxy http://user1:password1@localhost:10002 -url https://localhost:10003/test -trust https-server.crt 
 
 ## Other ways to set proxy
 
