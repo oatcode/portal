@@ -15,18 +15,18 @@ import (
 	"github.com/oatcode/portal"
 )
 
-func proxyListenAndServe(address string, cch chan<- net.Conn) {
+func proxyListenAndServe(address string, tlsConfig *tls.Config, cch chan<- net.Conn) {
 	log.Printf("Proxy server...")
-	l, err := net.Listen("tcp", address)
+	l, err := tls.Listen("tcp", address, tlsConfig)
 	if err != nil {
-		log.Fatal("Listen: ", err)
+		log.Fatal(err)
 	}
 	for {
 		c, err := l.Accept()
 		if err != nil {
-			log.Fatal("Accept: ", err)
+			log.Fatal(err)
 		}
-		log.Printf("Proxy server connected. conn=%s", connString(c))
+		log.Printf("Proxy server connected: %s", connString(c))
 		cch <- c
 	}
 }
@@ -35,36 +35,38 @@ func tunnelListenAndServe(address string, tlsConfig *tls.Config, cch <-chan net.
 	log.Printf("Tunnel server...")
 	l, err := tls.Listen("tcp", address, tlsConfig)
 	if err != nil {
-		log.Fatal("Listen: ", err)
+		log.Fatal(err)
 	}
 	for {
 		c, err := l.Accept()
 		if err != nil {
-			log.Fatal("Accept: ", err)
+			log.Fatal(err)
 		}
-		log.Printf("Tunnel server connected. conn=%s", connString(c))
+		log.Printf("Tunnel server connected: %s", connString(c))
 		go portal.TunnelServe(c, cch)
 	}
 }
 
-func loadCert(certFile string, keyFile string, trustFile string) *tls.Config {
-	// Load cert and key
+func createTlsConfig(certFile string, keyFile string) *tls.Config {
 	cer, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		log.Fatal(err)
 	}
-	// Load trust cert
+	return &tls.Config{
+		Certificates: []tls.Certificate{cer},
+	}
+}
+
+func createTlsConfigWithTrust(certFile string, keyFile string, trustFile string) *tls.Config {
+	config := createTlsConfig(certFile, keyFile)
 	pemCerts, err := ioutil.ReadFile(trustFile)
 	if err != nil {
 		log.Fatal(err)
 	}
-	clientCAs := x509.NewCertPool()
-	clientCAs.AppendCertsFromPEM(pemCerts)
-	return &tls.Config{
-		Certificates: []tls.Certificate{cer},
-		ClientCAs:    clientCAs,
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-	}
+	config.ClientCAs = x509.NewCertPool()
+	config.ClientCAs.AppendCertsFromPEM(pemCerts)
+	config.ClientAuth = tls.RequireAndVerifyClientCert
+	return config
 }
 
 func connString(c net.Conn) string {
@@ -114,15 +116,16 @@ func main() {
 	flag.StringVar(&proxyPassword, "proxyPassword", "", "Proxy password")
 	flag.StringVar(&certFile, "cert", "", "TLS certificate filename")
 	flag.StringVar(&keyFile, "key", "", "TLS certificate key filename")
-	flag.StringVar(&trustFile, "trust", "", "TLS trusted client certificates filename")
+	flag.StringVar(&trustFile, "trust", "", "TLS client certificate filename to trust")
 	flag.Parse()
 
-	tlsConfig := loadCert(certFile, keyFile, trustFile)
+	proxyTlsConfig := createTlsConfig(certFile, keyFile)
+	tunnelTlsConfig := createTlsConfigWithTrust(certFile, keyFile, trustFile)
 
 	portal.Logf = log.Printf
 	portal.Filter = authFilter(proxyUsername, proxyPassword)
 
 	cch := make(chan net.Conn)
-	go proxyListenAndServe(proxy, cch)
-	tunnelListenAndServe(address, tlsConfig, cch)
+	go proxyListenAndServe(proxy, proxyTlsConfig, cch)
+	tunnelListenAndServe(address, tunnelTlsConfig, cch)
 }
