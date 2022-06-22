@@ -73,7 +73,7 @@ Run TLS tunnel client and server on port 10001, where proxy is on the TLS tunnel
 Run HTTPS client and server on port 10003
 
     sample-https-server -address :10003 -cert https-server.crt -key https-server.key
-    sample-https-client -proxy http://user1:pw1@localhost:10002 -url https://localhost:10003/test -trust https-server.crt -trust tunnel-server.crt
+    sample-https-client -proxy https://user1:pw1@localhost:10002 -url https://localhost:10003/test -trust https-server.crt -trust tunnel-server.crt
 
 ## Other ways to set proxy
 
