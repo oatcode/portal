@@ -4,20 +4,33 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 )
 
-func loadCert(trustFile string) *tls.Config {
-	// Load trust cert
-	trust, err := ioutil.ReadFile(trustFile)
-	if err != nil {
-		log.Fatal(err)
-	}
+type stringFlags []string
+
+func (s *stringFlags) String() string {
+	return fmt.Sprint(*s)
+}
+
+func (s *stringFlags) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
+func loadCert(trustFiles []string) *tls.Config {
 	rootCAs := x509.NewCertPool()
-	rootCAs.AppendCertsFromPEM(trust)
+	for _, f := range trustFiles {
+		trust, err := ioutil.ReadFile(f)
+		if err != nil {
+			log.Fatal(err)
+		}
+		rootCAs.AppendCertsFromPEM(trust)
+	}
 	return &tls.Config{
 		RootCAs: rootCAs,
 	}
@@ -26,13 +39,13 @@ func loadCert(trustFile string) *tls.Config {
 func main() {
 	var address string
 	var proxy string
-	var trustFile string
+	var trustFiles stringFlags
 	flag.StringVar(&address, "url", "", "HTTP GET URL")
 	flag.StringVar(&proxy, "proxy", "", "Proxy URL")
-	flag.StringVar(&trustFile, "trust", "", "TLS trust certificate filename")
+	flag.Var(&trustFiles, "trust", "TLS trust certificate filename")
 	flag.Parse()
 
-	tlsConfig := loadCert(trustFile)
+	tlsConfig := loadCert(trustFiles)
 
 	proxyURL, err := url.Parse(proxy)
 	if err != nil {
