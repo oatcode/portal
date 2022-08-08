@@ -22,7 +22,7 @@ func (s *stringFlags) Set(value string) error {
 	return nil
 }
 
-func loadCert(trustFiles []string) *tls.Config {
+func loadTrust(trustFiles []string) *tls.Config {
 	rootCAs := x509.NewCertPool()
 	for _, f := range trustFiles {
 		trust, err := ioutil.ReadFile(f)
@@ -45,19 +45,16 @@ func main() {
 	flag.Var(&trustFiles, "trust", "TLS trust certificate filename")
 	flag.Parse()
 
-	tlsConfig := loadCert(trustFiles)
-
 	proxyURL, err := url.Parse(proxy)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	transport := &http.Transport{
-		TLSClientConfig: tlsConfig,
-		Proxy:           http.ProxyURL(proxyURL),
-	}
 	c := &http.Client{
-		Transport: transport,
+		Transport: &http.Transport{
+			TLSClientConfig: loadTrust(trustFiles),
+			Proxy:           http.ProxyURL(proxyURL),
+		},
 	}
 
 	resp, err := c.Get(address)
