@@ -70,6 +70,7 @@ Note
 - TODO TRY: without origin, but data_origin/data_remote?
 */
 
+// ConnectOperation is for handling HTTP CONNECT request
 type ConnectOperation struct {
 	// Hijacked HTTP connection for CONNECT method
 	// or a connection with HTTP CONNECT processed
@@ -79,6 +80,18 @@ type ConnectOperation struct {
 	Address string
 }
 
+// Framer is for reading and writing messages with boundaries (i.e. frame)
+type Framer interface {
+	Read() (b []byte, err error)
+	Write(b []byte) error
+	Close(err error) error
+}
+
+var (
+	// Logf is for setting logging function
+	Logf func(string, ...interface{})
+)
+
 type key int
 
 const (
@@ -86,10 +99,15 @@ const (
 	bufferSize     = 2048
 )
 
-var (
-	// Logf is for setting logging function
-	Logf func(string, ...interface{})
-)
+func connString(c net.Conn) string {
+	return fmt.Sprintf("%v->%v", c.LocalAddr(), c.RemoteAddr())
+}
+
+func logf(fmt string, v ...interface{}) {
+	if Logf != nil {
+		Logf(fmt, v...)
+	}
+}
 
 func proxyWriter(c net.Conn, pch <-chan *message.Message) {
 	logf("proxyWriter starts. conn=%s", connString(c))
@@ -326,20 +344,4 @@ func TunnelServe(ctx context.Context, c Framer, coch <-chan ConnectOperation) {
 	close(ich)
 	// Don't close och, as mapper may still use it. Let GC takes care of it.
 	// Don't close coch, as proxyConnect may still use it. Let GC takes care of it.
-}
-
-func connString(c net.Conn) string {
-	return fmt.Sprintf("%v->%v", c.LocalAddr(), c.RemoteAddr())
-}
-
-func logf(fmt string, v ...interface{}) {
-	if Logf != nil {
-		Logf(fmt, v...)
-	}
-}
-
-type Framer interface {
-	Read() (b []byte, err error)
-	Write(b []byte) error
-	Close(err error) error
 }
