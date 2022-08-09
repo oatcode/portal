@@ -36,7 +36,7 @@ func (h proxyConnectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		log.Printf("Proxy server connected: %s", connString(conn))
+		log.Printf("Proxy connect: %s", connString(conn))
 		coch <- portal.ConnectOperation{Conn: conn, Address: r.URL.Host}
 	} else {
 		h.other.ServeHTTP(w, r)
