@@ -1,10 +1,11 @@
-// Package portal provides ability to build a 2-node HTTP tunnel
+// Package portal provides the ability to build a 2-node HTTP tunnel
 package portal
 
 import (
 	"context"
 	fmt "fmt"
 	"io"
+	"math"
 	"net"
 	"strings"
 
@@ -23,7 +24,7 @@ Proxy listens to incoming tunneling request and interact with the remote side
 A mapper keeps keep track of remote/local initiated connections separately to prevent ID conflicts
 
 Generate protobuf file with:
-  protoc -I . message.proto --go_out=plugins=grpc:.
+  protoc --proto_path=pkg/message --go_out=. pkg/message/message.proto
 
 Appreviations used in code:
 ich = tunnel input channel
@@ -66,8 +67,6 @@ PW = Proxy Writer
 Note
 - Proxy can also run on tunnel client side or both
 - HTTP Connector on remote side will return 503 for any connection error
-- TODO FIX: id is unique for 2 billion, but still finite
-- TODO TRY: without origin, but data_origin/data_remote?
 */
 
 // ConnectOperation is for handling HTTP CONNECT request
@@ -82,8 +81,15 @@ type ConnectOperation struct {
 
 // Framer is for reading and writing messages with boundaries (i.e. frame)
 type Framer interface {
+	// Read reads a message from the connection
+	// The returned byte array is of the exact length of the message
 	Read() (b []byte, err error)
+
+	// Write writes the entire byte array as a message to the connection
 	Write(b []byte) error
+
+	// Close closes the connection
+	// Error maybe used by the underlying connection protocol
 	Close(err error) error
 }
 
@@ -109,22 +115,22 @@ func logf(fmt string, v ...interface{}) {
 	}
 }
 
-func proxyWriter(c net.Conn, pch <-chan *message.Message) {
-	logf("proxyWriter starts. conn=%s", connString(c))
+func proxyWriter(c net.Conn, pch <-chan *message.Message, id int32) {
+	logf("proxyWriter starts. id=%d conn=%s", id, connString(c))
 	defer func() {
-		logf("proxyWriter ends. conn=%s", connString(c))
+		logf("proxyWriter ends. id=%d conn=%s", id, connString(c))
 		c.Close()
 	}()
 	for co := range pch {
 		if co.Type == message.Message_HTTP_CONNECT_OK {
 			c.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
-			logf("proxyWriter connected. conn=%s", connString(c))
+			logf("proxyWriter connected. id=%d conn=%s", id, connString(c))
 		} else if co.Type == message.Message_HTTP_SERVICE_UNAVAILABLE {
 			c.Write([]byte("HTTP/1.1 503 Service Unavailable\r\n\r\n"))
-			logf("proxyWriter service unavailable. conn=%s", connString(c))
+			logf("proxyWriter service unavailable. id=%d conn=%s", id, connString(c))
 			return
 		} else if co.Type == message.Message_DISCONNECTED {
-			logf("proxyWriter disconnected. conn=%s", connString(c))
+			logf("proxyWriter disconnected. id=%d conn=%s", id, connString(c))
 			return
 		} else if co.Type == message.Message_DATA {
 			c.Write(co.Buf)
@@ -134,18 +140,18 @@ func proxyWriter(c net.Conn, pch <-chan *message.Message) {
 
 // proxyReader uses the origin to denote if it is handling a local initiated connection or a remote one
 func proxyReader(c net.Conn, och chan<- *message.Message, id int32, origin message.Message_Origin) {
-	logf("proxyReader starts. conn=%s", connString(c))
-	defer logf("proxyReader ends. conn=%s", connString(c))
+	logf("proxyReader starts. id=%d conn=%s", id, connString(c))
+	defer logf("proxyReader ends. id=%d conn=%s", id, connString(c))
 	for {
 		buf := make([]byte, bufferSize)
 		len, err := c.Read(buf)
 		if err != nil {
 			if err == io.EOF {
-				logf("proxyReader local disconnected. conn=%s", connString(c))
+				logf("proxyReader local disconnected. id=%d conn=%s", id, connString(c))
 			} else if strings.Contains(err.Error(), "use of closed network connection") {
-				logf("proxyReader remote disconnected. conn=%s", connString(c))
+				logf("proxyReader remote disconnected. id=%d conn=%s", id, connString(c))
 			} else {
-				logf("proxyReader read error. conn=%s err=%v", connString(c), err)
+				logf("proxyReader read error. id=%d conn=%s err=%v", id, connString(c), err)
 			}
 
 			co := &message.Message{
@@ -168,7 +174,7 @@ func proxyReader(c net.Conn, och chan<- *message.Message, id int32, origin messa
 }
 
 func proxyConnector(sa string, och chan<- *message.Message, pch <-chan *message.Message, id int32) {
-	logf("proxyConnector connecting. sa=%s", sa)
+	logf("proxyConnector connecting. id=%d sa=%s", id, sa)
 	c, err := net.Dial("tcp", sa)
 	if err != nil {
 		co := &message.Message{
@@ -176,12 +182,12 @@ func proxyConnector(sa string, och chan<- *message.Message, pch <-chan *message.
 			Id:   id,
 		}
 		och <- co
-		logf("proxyConnector connect error. sa=%s err=%v", sa, err)
+		logf("proxyConnector connect error. id=%d sa=%s err=%v", id, sa, err)
 		return
 	}
-	logf("proxyConnector connected. conn=%s", connString(c))
+	logf("proxyConnector connected. id=%d conn=%s", id, connString(c))
 
-	go proxyWriter(c, pch)
+	go proxyWriter(c, pch, id)
 	go proxyReader(c, och, id, message.Message_ORIGIN_REMOTE)
 
 	co := &message.Message{
@@ -204,18 +210,20 @@ func mapper(ich <-chan *message.Message, coch <-chan ConnectOperation, och chan<
 	lm := make(map[int32]chan<- *message.Message)
 	rm := make(map[int32]chan<- *message.Message)
 	lcm := make(map[int32]net.Conn)
+	defer func() {
+		// Channel closed. Clear connections
+		for _, ch := range lm {
+			close(ch)
+		}
+		for _, ch := range rm {
+			close(ch)
+		}
+	}()
 
 	for {
 		select {
 		case i, ok := <-ich:
 			if !ok {
-				// Channel closed. Clear connections
-				for _, ch := range lm {
-					close(ch)
-				}
-				for _, ch := range rm {
-					close(ch)
-				}
 				return
 			}
 			// From remote
@@ -252,11 +260,23 @@ func mapper(ich <-chan *message.Message, coch <-chan ConnectOperation, och chan<
 				pch <- i
 			}
 		case co := <-coch:
+			// Find next available id
+			used := true
+			for i := int32(0); i < math.MaxInt32; i++ {
+				if _, used = lm[id+i]; !used {
+					id = id + i
+					break
+				}
+			}
+			if used {
+				logf("Too many connections")
+				return
+			}
 			// New connection from local
 			lcm[id] = co.Conn
 			pch := make(chan *message.Message)
 			lm[id] = pch
-			go proxyWriter(co.Conn, pch)
+			go proxyWriter(co.Conn, pch, id)
 
 			och <- &message.Message{
 				Type:          message.Message_HTTP_CONNECT,

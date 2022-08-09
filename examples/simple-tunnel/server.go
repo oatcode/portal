@@ -33,7 +33,7 @@ func (h proxyConnectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn.SetDeadline(time.Time{})
 	coch <- portal.ConnectOperation{Conn: conn, Address: r.URL.Host}
 
-	log.Printf("Proxy server connected: %s", connString(conn))
+	log.Printf("Proxy connect: %s", connString(conn))
 }
 
 func tunnelListenAndServe() {
