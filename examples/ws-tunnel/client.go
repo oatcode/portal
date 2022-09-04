@@ -37,9 +37,7 @@ func dialAndServe(tlsConfig *tls.Config) {
 	defer c.Close(websocket.StatusNormalClosure, "")
 	log.Print("Tunnel client connected")
 
-	// connection channel unused in this sample
-	coch := make(chan portal.ConnectOperation)
-	portal.TunnelServe(context.Background(), NewWebsocketFramer(c, address), coch)
+	portal.TunnelServe(context.Background(), NewWebsocketFramer(c, address), nil)
 }
 
 func createClientTlsConfig(trustFile string) *tls.Config {
