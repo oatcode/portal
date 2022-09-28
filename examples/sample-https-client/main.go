@@ -39,9 +39,11 @@ func loadTrust(trustFiles []string) *tls.Config {
 func main() {
 	var address string
 	var proxy string
+	var proxyBearer string
 	var trustFiles stringFlags
 	flag.StringVar(&address, "url", "", "HTTP GET URL")
 	flag.StringVar(&proxy, "proxy", "", "Proxy URL")
+	flag.StringVar(&proxyBearer, "proxy-bearer", "", "Proxy bearer token")
 	flag.Var(&trustFiles, "trust", "TLS trust certificate filename")
 	flag.Parse()
 
@@ -50,11 +52,15 @@ func main() {
 		log.Fatal(err)
 	}
 
+	transport := &http.Transport{
+		TLSClientConfig: loadTrust(trustFiles),
+		Proxy:           http.ProxyURL(proxyURL),
+	}
+	if proxyBearer != "" {
+		transport.ProxyConnectHeader = http.Header{"Proxy-Authorization": []string{"Bearer " + proxyBearer}}
+	}
 	c := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: loadTrust(trustFiles),
-			Proxy:           http.ProxyURL(proxyURL),
-		},
+		Transport: transport,
 	}
 
 	resp, err := c.Get(address)
