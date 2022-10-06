@@ -37,7 +37,7 @@ kubectl apply -f onprem.yaml
 ## Start tunnel client
 
 ```
-./onprem -client -address localhost:8080 -trust server.crt -jwt $JWT
+./onprem -client -address localhost:8080 -trust tunnel-server.crt -jwt $JWT
 ```
 
 ## Start sample https sersver
@@ -49,9 +49,9 @@ kubectl apply -f onprem.yaml
 ## Run curl or sample https client
 
 ```
-curl --proxy https://localhost:8080 --proxy-cacert /Users/alei/git/onprem-service/server.crt --proxy-header "Proxy-Authorization: Bearer $JWT" --cacert https-server.crt https://localhost:10003/test
+curl --proxy https://localhost:8080 --proxy-cacert tunnel-server.crt --proxy-header "Proxy-Authorization: Bearer $JWT" --cacert https-server.crt https://localhost:10003/test
 
-./sample-https-client --proxy https://localhost:8080 -proxy-bearer $JWT -url https://localhost:10003/test -trust ../https-server.crt -trust /Users/alei/git/onprem-service/server.crt
+./sample-https-client --proxy https://localhost:8080 -proxy-bearer $JWT -url https://localhost:10003/test -trust ../https-server.crt -trust tunnel-server.crt
 ```
 
 ## Undeploy k8s services
