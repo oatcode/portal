@@ -24,6 +24,7 @@ func dialAndServe(tlsConfig *tls.Config) {
 		HTTPClient: &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: tlsConfig,
+				Proxy: http.ProxyFromEnvironment,
 			},
 		},
 		HTTPHeader: http.Header{
