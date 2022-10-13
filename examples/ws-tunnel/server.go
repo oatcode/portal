@@ -73,21 +73,46 @@ func parseBasicAuth(auth string) (username, password string, ok bool) {
 	return cs[:s], cs[s+1:], true
 }
 
+func verifyBasic(auth, userpw string) bool {
+	const prefix = "Basic "
+	if len(auth) < len(prefix) || !strings.EqualFold(auth[:len(prefix)], prefix) {
+		return false
+	}
+	c, err := base64.StdEncoding.DecodeString(auth[len(prefix):])
+	if err != nil {
+		return false
+	}
+	return string(c) == userpw
+}
+
+func verifyBearer(auth, token string) bool {
+	const prefix = "Bearer "
+	if len(auth) < len(prefix) || !strings.EqualFold(auth[:len(prefix)], prefix) {
+		return false
+	}
+	return auth[len(prefix):] == token
+}
+
 func proxyAuth(r *http.Request) bool {
 	auth := r.Header.Get("Proxy-Authorization")
-	u, p, ok := parseBasicAuth(auth)
-	if ok && u == proxyUsername && p == proxyPassword {
-		return true
+	if proxyBasicAuth != "" {
+		return verifyBasic(auth, proxyBasicAuth)
 	}
-	return false
+	if proxyBearerAuth != "" {
+		return verifyBearer(auth, proxyBearerAuth)
+	}
+	return true
 }
 
 func tunnelAuth(r *http.Request) bool {
-	u, p, ok := r.BasicAuth()
-	if ok && u == tunnelUsername && p == tunnelPassword {
-		return true
+	auth := r.Header.Get("Authorization")
+	if tunnelBasicAuth != "" {
+		return verifyBasic(auth, tunnelBasicAuth)
 	}
-	return false
+	if tunnelBearerAuth != "" {
+		return verifyBearer(auth, tunnelBearerAuth)
+	}
+	return true
 }
 
 func createServerTlsConfig(certFile string, keyFile string) *tls.Config {
