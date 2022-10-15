@@ -12,10 +12,10 @@ import (
 var client bool
 var server bool
 var address string
-var proxyUsername string
-var proxyPassword string
-var tunnelUsername string
-var tunnelPassword string
+var proxyBasicAuth string
+var proxyBearerAuth string
+var tunnelBasicAuth string
+var tunnelBearerAuth string
 var certFile string
 var keyFile string
 var trustFile string
@@ -23,11 +23,11 @@ var trustFile string
 func main() {
 	flag.BoolVar(&client, "client", false, "Run client")
 	flag.BoolVar(&server, "server", false, "Run server")
-	flag.StringVar(&address, "address", "", "Address [<ip>]:<port>")
-	flag.StringVar(&proxyUsername, "proxyUsername", "", "Proxy username")
-	flag.StringVar(&proxyPassword, "proxyPassword", "", "Proxy password")
-	flag.StringVar(&tunnelUsername, "tunnelUsername", "", "Tunnel username")
-	flag.StringVar(&tunnelPassword, "tunnelPassword", "", "Tunnel password")
+	flag.StringVar(&address, "address", "", "Address [<hostname>]:<port>")
+	flag.StringVar(&proxyBasicAuth, "proxyBasicAuth", "", "Proxy basic auth <username>:<password>")
+	flag.StringVar(&proxyBearerAuth, "proxyBearerAuth", "", "Proxy bearer token")
+	flag.StringVar(&tunnelBasicAuth, "tunnelBasicAuth", "", "Tunnel basic auth <username>:<password>")
+	flag.StringVar(&tunnelBearerAuth, "tunnelBearerAuth", "", "Tunnel bearer auth token")
 	flag.StringVar(&certFile, "cert", "", "TLS certificate filename")
 	flag.StringVar(&keyFile, "key", "", "TLS certificate key filename")
 	flag.StringVar(&trustFile, "trust", "", "TLS client certificate filename to trust")

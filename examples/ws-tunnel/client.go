@@ -20,15 +20,22 @@ func dialAndServe(tlsConfig *tls.Config) {
 		Host:   address,
 		Path:   "tunnel",
 	}
+
+	h := http.Header{}
+	if tunnelBasicAuth != "" {
+		h.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(tunnelBasicAuth)))
+	}
+	if tunnelBearerAuth != "" {
+		h.Add("Authorization", "Bearer "+tunnelBearerAuth)
+	}
 	options := &websocket.DialOptions{
 		HTTPClient: &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: tlsConfig,
+				Proxy:           http.ProxyFromEnvironment,
 			},
 		},
-		HTTPHeader: http.Header{
-			"Authorization": {"Basic " + base64.StdEncoding.EncodeToString([]byte(tunnelUsername+":"+tunnelPassword))},
-		},
+		HTTPHeader: h,
 	}
 	c, _, err := websocket.Dial(context.Background(), u.String(), options)
 	if err != nil {

@@ -82,13 +82,13 @@ Run sample HTTPS server on port 10003 and client via proxy port 10002:
 ### Websocket tunnel example
 The example runs both websocket tunnel and proxy on port 10001. In addition, tunnel and proxy are protected by TLS and user/password:
 
-    ws-tunnel -server -address :10001 -proxyUsername user1 -proxyPassword pw1 -tunnelUsername tunnel1 -tunnelPassword pw1 -cert tunnel-server.crt -key tunnel-server.key 
-    ws-tunnel -client -address localhost:10001 -tunnelUsername tunnel1 -tunnelPassword pw1 -trust tunnel-server.crt
+    ws-tunnel -server -address :10001 -proxyBasicAuth app1:pw1 -tunnelBasicAuth tenant1:pw1 -cert tunnel-server.crt -key tunnel-server.key 
+    ws-tunnel -client -address localhost:10001 -tunnelBasicAuth tenant1:pw1 -trust tunnel-server.crt
 
 Run sample HTTPS server on port 10003 and client via proxy port 10001:
 
     sample-https-server -address :10003 -cert https-server.crt -key https-server.key
-    sample-https-client --proxy https://user1:pw1@localhost:10001 -url https://localhost:10003/test -trust https-server.crt -trust tunnel-server.crt
+    sample-https-client --proxy https://app1:pw1@localhost:10001 -url https://localhost:10003/test -trust https-server.crt -trust tunnel-server.crt
 
 ## Other ways to set proxy
 
