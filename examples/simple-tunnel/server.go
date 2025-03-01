@@ -5,35 +5,21 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"time"
 
 	"github.com/oatcode/portal"
 )
 
-var coch = make(chan portal.ConnectOperation)
+var tunnel *portal.Tunnel
 
 type proxyConnectHandler struct{}
 
 func (h proxyConnectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodConnect {
-		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+	if tunnel != nil {
+		tunnel.Hijack(w, r)
+	} else {
+		http.Error(w, "tunnel not available", http.StatusServiceUnavailable)
 		return
 	}
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, "webserver doesn't support hijacking", http.StatusInternalServerError)
-		return
-	}
-	conn, _, err := hj.Hijack()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	// Need to clean deadlines in case it was set
-	conn.SetDeadline(time.Time{})
-	coch <- portal.ConnectOperation{Conn: conn, Address: r.URL.Host}
-
-	log.Printf("Proxy connect: %s", connString(conn))
 }
 
 func tunnelListenAndServe() {
@@ -47,7 +33,8 @@ func tunnelListenAndServe() {
 			log.Fatal(err)
 		}
 		log.Printf("Tunnel server connected: %s", connString(c))
-		go portal.TunnelServe(context.Background(), NewNetConnFramer(c), coch)
+		tunnel = &portal.Tunnel{}
+		tunnel.Serve(context.Background(), NewNetConnFramer(c))
 	}
 }
 

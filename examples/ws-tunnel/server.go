@@ -4,40 +4,34 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
-	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"strings"
 
+	"github.com/coder/websocket"
 	"github.com/oatcode/portal"
-	"nhooyr.io/websocket"
 )
 
-var coch = make(chan portal.ConnectOperation)
+var tunnel *portal.Tunnel
 
 type proxyConnectHandler struct {
 	other *http.ServeMux
 }
 
-func (h proxyConnectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *proxyConnectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
 		if !proxyAuth(r) {
 			http.Error(w, "proxy authentication failed", http.StatusUnauthorized)
 			return
 		}
-		hj, ok := w.(http.Hijacker)
-		if !ok {
-			http.Error(w, "webserver doesn't support hijacking", http.StatusInternalServerError)
+		if tunnel != nil {
+			if err := tunnel.Hijack(w, r); err != nil {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			}
+		} else {
+			http.Error(w, "tunnel not available", http.StatusServiceUnavailable)
 			return
 		}
-		conn, _, err := hj.Hijack()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		log.Printf("Proxy connect: %s", connString(conn))
-		coch <- portal.ConnectOperation{Conn: conn, Address: r.URL.Host}
 	} else {
 		h.other.ServeHTTP(w, r)
 	}
@@ -52,25 +46,30 @@ func tunnelHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		panic(err)
 	}
-	go portal.TunnelServe(context.Background(), NewWebsocketFramer(conn, r.RemoteAddr), coch)
+
+	// TODO Only one tunnel now!!!
+	// TODO Need to load balance
+
+	tunnel = &portal.Tunnel{}
+	tunnel.Serve(context.Background(), NewWebsocketFramer(conn, r.RemoteAddr))
 }
 
-// Copied from golang's http lib
-func parseBasicAuth(auth string) (username, password string, ok bool) {
-	const prefix = "Basic "
-	if len(auth) < len(prefix) || !strings.EqualFold(auth[:len(prefix)], prefix) {
+// directHandler for query that target directly to the tunnel server
+// We will send it down and let the tunnel client handle where to connect
+// We need to re-send the request. The net.Conn to pass in has to be a special one.
+// It will replay the request method and header first then go back to the hijacked connection
+func directHandler(w http.ResponseWriter, r *http.Request) {
+	if !proxyAuth(r) {
+		http.Error(w, "proxy authentication failed", http.StatusUnauthorized)
 		return
 	}
-	c, err := base64.StdEncoding.DecodeString(auth[len(prefix):])
-	if err != nil {
+
+	if tunnel != nil {
+		tunnel.Hijack(w, r)
+	} else {
+		http.Error(w, "tunnel not available", http.StatusServiceUnavailable)
 		return
 	}
-	cs := string(c)
-	s := strings.IndexByte(cs, ':')
-	if s < 0 {
-		return
-	}
-	return cs[:s], cs[s+1:], true
 }
 
 func verifyBasic(auth, userpw string) bool {
@@ -125,21 +124,18 @@ func createServerTlsConfig(certFile string, keyFile string) *tls.Config {
 	}
 }
 
-func connString(c net.Conn) string {
-	return fmt.Sprintf("%v->%v", c.LocalAddr(), c.RemoteAddr())
-}
-
 func tunnelServer() {
 	log.Printf("Tunnel server...")
 
 	otherHandler := http.NewServeMux()
 	otherHandler.HandleFunc("/tunnel", tunnelHandler)
+	otherHandler.HandleFunc("/", directHandler)
 
 	listener, err := tls.Listen("tcp", address, createServerTlsConfig(certFile, keyFile))
 	if err != nil {
 		log.Fatal(err)
 	}
-	http.Serve(listener, proxyConnectHandler{
+	http.Serve(listener, &proxyConnectHandler{
 		other: otherHandler,
 	})
 }

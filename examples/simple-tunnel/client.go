@@ -17,5 +17,6 @@ func tunnelClient() {
 	defer c.Close()
 	log.Print("Tunnel client connected")
 
-	portal.TunnelServe(context.Background(), NewNetConnFramer(c), nil)
+	tunnel := &portal.Tunnel{}
+	tunnel.Serve(context.Background(), NewNetConnFramer(c))
 }

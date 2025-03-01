@@ -5,8 +5,8 @@ import (
 	"flag"
 	"log"
 
+	"github.com/coder/websocket"
 	"github.com/oatcode/portal"
-	"nhooyr.io/websocket"
 )
 
 var client bool

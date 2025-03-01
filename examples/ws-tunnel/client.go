@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/coder/websocket"
 	"github.com/oatcode/portal"
-	"nhooyr.io/websocket"
 )
 
 func dialAndServe(tlsConfig *tls.Config) {
@@ -44,7 +44,14 @@ func dialAndServe(tlsConfig *tls.Config) {
 	defer c.Close(websocket.StatusNormalClosure, "")
 	log.Print("Tunnel client connected")
 
-	portal.TunnelServe(context.Background(), NewWebsocketFramer(c, address), nil)
+	tn := portal.Tunnel{
+		// ConnectLocalHandler: func(ctx context.Context, sa string) (net.Conn, error) {
+		// 	return tls.Dial("tcp", "localhost:10003", &tls.Config{
+		// 		InsecureSkipVerify: true,
+		// 	})
+		// },
+	}
+	tn.Serve(context.Background(), NewWebsocketFramer(c, address))
 }
 
 func createClientTlsConfig(trustFile string) *tls.Config {

@@ -13,8 +13,6 @@ The main goal of this project is to provide access from cloud to on-prem without
 The tunnel has two sides: client and server.
 An on-prem application running tunnel client will connect to tunnel server running in cloud. Proxy port can be opened on cloud side to allow access to on-prem via HTTP tunnelling: <https://en.wikipedia.org/wiki/HTTP_tunnel>
 
-This library only supports HTTPS tunneling that uses HTTP CONNECT to initiate connection.
-
                    +---------+
                    | Cloud   |
                    | HTTPS   |
@@ -54,13 +52,14 @@ This library only supports HTTPS tunneling that uses HTTP CONNECT to initiate co
 
 # Usage
 
-Wrap the tunnel connection with Framer interface and use TunnelServe:
+Wrap the tunnel connection with Framer interface and use Serve:
 
-    coch := make(chan portal.ConnectOperation)
-    portal.TunnelServe(ctx, framer, coch)
+    tn := portal.Tunnel{}
+    tn.Serve(ctx, framer)
 
 Framer interface is for reading and writing messages with boundaries (i.e. frame). The examples show a simple length/bytes and WebSocket framer.
 
-coch is the channel to handle incoming proxy connection. Fill the ConnectOperation struct with net.Conn and proxy connect address. The examples illustrate how this is done with Go's http Hijack function.
+For incoming proxy connections, pass the processing to the tunnel with:
 
+    tn.Hijack(w, r)
 

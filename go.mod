@@ -1,10 +1,9 @@
 module github.com/oatcode/portal
 
-go 1.17
+go 1.22
 
-require google.golang.org/protobuf v1.28.0
+toolchain go1.23.3
 
-require (
-	github.com/klauspost/compress v1.10.3 // indirect
-	nhooyr.io/websocket v1.8.7
-)
+require google.golang.org/protobuf v1.36.5
+
+require github.com/coder/websocket v1.8.12
