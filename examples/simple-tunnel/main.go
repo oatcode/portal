@@ -47,6 +47,7 @@ func (c *NetConnFramer) Write(b []byte) error {
 }
 
 func (c *NetConnFramer) Close(err error) error {
+	log.Printf("Closing connection: %v", err)
 	return c.conn.Close()
 }
 

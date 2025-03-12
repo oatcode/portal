@@ -2,12 +2,15 @@
 package portal
 
 import (
+	"bytes"
 	"context"
 	fmt "fmt"
 	"io"
 	"math"
 	"net"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/oatcode/portal/pkg/message"
 	"google.golang.org/protobuf/proto"
@@ -25,13 +28,6 @@ A mapper keeps keep track of remote/local initiated connections separately to pr
 
 Generate protobuf file with:
   protoc --proto_path=pkg/message --go_out=. pkg/message/message.proto
-
-Appreviations used in code:
-ich = tunnel input channel
-och = tunnel output channel
-coch = connect operation channel for processing HTTP CONNECT
-pch = proxy writer channel
-co = command
 
 The close sequence for sides s1 and s2
 s1 proxy-reader: read error. send disconnect to tunnel
@@ -69,16 +65,6 @@ Note
 - HTTP Connector on remote side will return 503 for any connection error
 */
 
-// ConnectOperation is for handling HTTP CONNECT request
-type ConnectOperation struct {
-	// Hijacked HTTP connection for CONNECT method
-	// or a connection with HTTP CONNECT processed
-	Conn net.Conn
-
-	// Address section from the HTTP CONNECT line
-	Address string
-}
-
 // Framer is for reading and writing messages with boundaries (i.e. frame)
 type Framer interface {
 	// Read reads a message from the connection
@@ -89,7 +75,6 @@ type Framer interface {
 	Write(b []byte) error
 
 	// Close closes the connection
-	// Error maybe used by the underlying connection protocol
 	Close(err error) error
 }
 
@@ -98,16 +83,9 @@ var (
 	Logf func(string, ...interface{})
 )
 
-type key int
-
 const (
-	connectKey key = iota
-	bufferSize     = 2048
+	bufferSize = 2048
 )
-
-func connString(c net.Conn) string {
-	return fmt.Sprintf("%v->%v", c.LocalAddr(), c.RemoteAddr())
-}
 
 func logf(fmt string, v ...interface{}) {
 	if Logf != nil {
@@ -115,49 +93,142 @@ func logf(fmt string, v ...interface{}) {
 	}
 }
 
-func proxyWriter(c net.Conn, pch <-chan *message.Message, id int32) {
-	logf("proxyWriter starts. id=%d conn=%s", id, connString(c))
+// Tunnel is for building a tunnel connection between two nodes
+type Tunnel struct {
+	// Create a connection on receiving proxy HTTP CONNECT from remote
+	ProxyConnect func(context.Context, string) (net.Conn, error)
+	// Create a connection on receiving regular HTTP call from remote
+	DirectConnect func(context.Context) (net.Conn, error)
+	// Feed new session to initiate new connection
+	initiateSessionCh chan *session
+}
+
+type session struct {
+	id             uint32
+	conn           net.Conn
+	isLocal        bool
+	isProxyConnect bool
+	remoteAddress  string // only used for proxy connect
+	proxyWriterCh  chan *message.Message
+	tunnel         *Tunnel
+}
+
+// Used to replay the request headers to the remote server
+type wrappedConn struct {
+	reader io.Reader
+	net.Conn
+}
+
+func (w *wrappedConn) Read(p []byte) (n int, err error) {
+	return w.reader.Read(p)
+}
+
+// Hijack hijacks the proxied HTTP connection.
+// The function name is borrowed from http.Hijacker.
+// If this function returns no error, the caller should not use the http.ResponseWriter anymore.
+// The only error returned is when hijacking is not supported.
+func (tn *Tunnel) Hijack(w http.ResponseWriter, r *http.Request) error {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		return fmt.Errorf("webserver doesn't support hijacking")
+	}
+	// bufrw can contain part of the request body
+	conn, bufrw, err := hj.Hijack()
+	if err != nil {
+		return fmt.Errorf("failed to hijack connection: %v", err)
+	}
+	// Reset deadline to prevent timeout
+	conn.SetDeadline(time.Time{})
+
+	address := ""
+	isProxyConnect := r.Method == http.MethodConnect
+	if !isProxyConnect {
+		startLine := strings.NewReader(fmt.Sprintf("%s %s %s\r\n", r.Method, r.URL, r.Proto))
+		// Add back host header since it's removed by the http server
+		r.Header.Add("Host", r.Host)
+		// write the request header to a buffer
+		var buf bytes.Buffer
+		if err := r.Header.Write(&buf); err != nil {
+			return fmt.Errorf("failed to write header: %v", err)
+		}
+		headers := bytes.NewReader(buf.Bytes())
+		emptyLine := strings.NewReader("\r\n")
+		reader := io.MultiReader(startLine, headers, emptyLine, bufrw, conn)
+		conn = &wrappedConn{
+			reader: reader,
+			Conn:   conn,
+		}
+	} else {
+		address = r.URL.Host
+	}
+
+	s := &session{
+		conn:           conn,
+		isProxyConnect: isProxyConnect,
+		isLocal:        true,
+		tunnel:         tn,
+		remoteAddress:  address,
+	}
+
+	tn.initiateSessionCh <- s
+	return nil
+}
+
+func (s *session) proxyWriter() {
+	logf("proxyWriter starts. %s", s.String())
 	defer func() {
-		logf("proxyWriter ends. id=%d conn=%s", id, connString(c))
-		c.Close()
+		logf("proxyWriter ends. %s", s.String())
+		s.conn.Close()
 	}()
-	for co := range pch {
-		if co.Type == message.Message_HTTP_CONNECT_OK {
-			c.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
-			logf("proxyWriter connected. id=%d conn=%s", id, connString(c))
-		} else if co.Type == message.Message_HTTP_SERVICE_UNAVAILABLE {
-			c.Write([]byte("HTTP/1.1 503 Service Unavailable\r\n\r\n"))
-			logf("proxyWriter service unavailable. id=%d conn=%s", id, connString(c))
+	for co := range s.proxyWriterCh {
+		if co.Type == message.Message_PROXY_CONNECTED {
+			s.conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+			logf("proxyWriter proxy connected. %s", s.String())
+		} else if co.Type == message.Message_DIRECT_CONNECTED {
+			logf("proxyWriter direct connected. %s", s.String())
+		} else if co.Type == message.Message_SERVICE_UNAVAILABLE {
+			s.conn.Write([]byte("HTTP/1.1 503 Service Unavailable\r\n\r\n"))
+			logf("proxyWriter service unavailable. %s", s.String())
 			return
 		} else if co.Type == message.Message_DISCONNECTED {
-			logf("proxyWriter disconnected. id=%d conn=%s", id, connString(c))
+			logf("proxyWriter disconnected. %s", s.String())
 			return
 		} else if co.Type == message.Message_DATA {
-			c.Write(co.Buf)
+			s.conn.Write(co.Data)
 		}
 	}
 }
 
+func (s *session) String() string {
+	return fmt.Sprintf("id=%d conn=%v->%v", s.id, s.conn.LocalAddr(), s.conn.RemoteAddr())
+}
+
 // proxyReader uses the origin to denote if it is handling a local initiated connection or a remote one
-func proxyReader(c net.Conn, och chan<- *message.Message, id int32, origin message.Message_Origin) {
-	logf("proxyReader starts. id=%d conn=%s", id, connString(c))
-	defer logf("proxyReader ends. id=%d conn=%s", id, connString(c))
+func (s *session) proxyReader(och chan<- *message.Message) {
+	logf("proxyReader starts. %s", s.String())
+	defer logf("proxyReader ends. %s", s.String())
+	var origin message.Message_Origin
+	if s.isLocal {
+		origin = message.Message_ORIGIN_LOCAL
+	} else {
+		origin = message.Message_ORIGIN_REMOTE
+	}
 	for {
 		buf := make([]byte, bufferSize)
-		len, err := c.Read(buf)
+		len, err := s.conn.Read(buf)
 		if err != nil {
 			if err == io.EOF {
-				logf("proxyReader local disconnected. id=%d conn=%s", id, connString(c))
+				logf("proxyReader local disconnected. %s", s.String())
 			} else if strings.Contains(err.Error(), "use of closed network connection") {
-				logf("proxyReader remote disconnected. id=%d conn=%s", id, connString(c))
+				logf("proxyReader remote disconnected. %s", s.String())
 			} else {
-				logf("proxyReader read error. id=%d conn=%s err=%v", id, connString(c), err)
+				logf("proxyReader read error. %s err=%v", s.String(), err)
 			}
 
 			co := &message.Message{
 				Type:   message.Message_DISCONNECTED,
 				Origin: origin,
-				Id:     id,
+				Id:     s.id,
 			}
 			och <- co
 			return
@@ -166,124 +237,165 @@ func proxyReader(c net.Conn, och chan<- *message.Message, id int32, origin messa
 		co := &message.Message{
 			Type:   message.Message_DATA,
 			Origin: origin,
-			Id:     id,
-			Buf:    buf[0:len],
+			Id:     s.id,
+			Data:   buf[0:len],
 		}
 		och <- co
 	}
 }
 
-func proxyConnector(sa string, och chan<- *message.Message, pch <-chan *message.Message, id int32) {
-	logf("proxyConnector connecting. id=%d sa=%s", id, sa)
-	c, err := net.Dial("tcp", sa)
+func (s *session) proxyConnector(ctx context.Context, outputCh chan<- *message.Message) {
+	logf("proxyConnector connecting. id=%d sa=%s", s.id, s.remoteAddress)
+	var conn net.Conn
+	var err error
+	if s.tunnel.ProxyConnect == nil {
+		var d net.Dialer
+		conn, err = d.DialContext(ctx, "tcp", s.remoteAddress)
+	} else {
+		conn, err = s.tunnel.ProxyConnect(ctx, s.remoteAddress)
+	}
 	if err != nil {
-		co := &message.Message{
-			Type: message.Message_HTTP_SERVICE_UNAVAILABLE,
-			Id:   id,
-		}
-		och <- co
-		logf("proxyConnector connect error. id=%d sa=%s err=%v", id, sa, err)
+		outputCh <- &message.Message{Id: s.id, Type: message.Message_SERVICE_UNAVAILABLE}
+		logf("proxyConnector ProxyConnect error. id=%d sa=%s err=%v", s.id, s.remoteAddress, err)
 		return
 	}
-	logf("proxyConnector connected. id=%d conn=%s", id, connString(c))
+	s.conn = conn
+	logf("proxyConnector connected. %s", s.String())
 
-	go proxyWriter(c, pch, id)
-	go proxyReader(c, och, id, message.Message_ORIGIN_REMOTE)
+	go s.proxyWriter()
+	go s.proxyReader(outputCh)
+	outputCh <- &message.Message{Id: s.id, Type: message.Message_PROXY_CONNECTED}
+}
 
-	co := &message.Message{
-		Type: message.Message_HTTP_CONNECT_OK,
-		Id:   id,
+func (s *session) directConnector(ctx context.Context, outputCh chan<- *message.Message) {
+	logf("directConnector connecting. id=%d", s.id)
+	if s.tunnel.DirectConnect == nil {
+		outputCh <- &message.Message{Id: s.id, Type: message.Message_SERVICE_UNAVAILABLE}
+		logf("directConnector DirectConnect not implemented. id=%d", s.id)
+		return
 	}
-	och <- co
+	conn, err := s.tunnel.DirectConnect(ctx)
+	if err != nil {
+		outputCh <- &message.Message{Id: s.id, Type: message.Message_SERVICE_UNAVAILABLE}
+		logf("directConnector DirectConnect error. id=%d err=%v", s.id, err)
+		return
+	}
+	s.conn = conn
+	logf("directConnector connected. %s", s.String())
+
+	go s.proxyWriter()
+	go s.proxyReader(outputCh)
+	outputCh <- &message.Message{Id: s.id, Type: message.Message_DIRECT_CONNECTED}
 }
 
 // Requires 2 maps to differenciate local and remote originated connections
-//   lm is local channel map
-//   rm is remote channel map
+//
+//	lm is local channel map
+//	rm is remote channel map
+//
 // Connection map is only used until connection is connected
-//   lcm is local connection map
-func mapper(ich <-chan *message.Message, coch <-chan ConnectOperation, och chan<- *message.Message) {
+//
+//	lcm is local connection map
+func (tn *Tunnel) mapper(ctx context.Context, inputCh <-chan *message.Message, outputCh chan<- *message.Message) {
 	logf("mapper starts")
 	defer logf("mapper ends")
 
-	var id int32
-	lm := make(map[int32]chan<- *message.Message)
-	rm := make(map[int32]chan<- *message.Message)
-	lcm := make(map[int32]net.Conn)
+	var availableId uint32
+	lconn := make(map[uint32]*session)
+	rconn := make(map[uint32]*session)
 	defer func() {
 		// Channel closed. Clear connections
-		for _, ch := range lm {
-			close(ch)
+		for _, s := range lconn {
+			close(s.proxyWriterCh)
 		}
-		for _, ch := range rm {
-			close(ch)
+		for _, s := range rconn {
+			close(s.proxyWriterCh)
 		}
 	}()
 
 	for {
 		select {
-		case i, ok := <-ich:
+		case i, ok := <-inputCh:
 			if !ok {
 				return
 			}
 			// From remote
-			if i.Type == message.Message_HTTP_CONNECT {
-				// Remote initiated
-				pch := make(chan *message.Message)
-				rm[i.Id] = pch
-				go proxyConnector(i.SocketAddress, och, pch, i.Id)
-			} else if i.Type == message.Message_HTTP_CONNECT_OK {
+			if i.Type == message.Message_PROXY_CONNECT {
+				// Remote initiated. Local conn not created yet
+				s := &session{
+					tunnel:        tn,
+					remoteAddress: i.Address,
+					isLocal:       false,
+					id:            i.Id,
+					proxyWriterCh: make(chan *message.Message),
+				}
+				rconn[i.Id] = s
+				go s.proxyConnector(ctx, outputCh)
+			} else if i.Type == message.Message_DIRECT_CONNECT {
+				// Remote initiated. Local conn not created yet
+				s := &session{
+					tunnel:        tn,
+					isLocal:       false,
+					id:            i.Id,
+					proxyWriterCh: make(chan *message.Message),
+				}
+				rconn[i.Id] = s
+				go s.directConnector(ctx, outputCh)
+			} else if i.Type == message.Message_PROXY_CONNECTED {
 				// Local initiated
-				c := lcm[i.Id]
-				delete(lcm, i.Id)
-				go proxyReader(c, och, i.Id, message.Message_ORIGIN_LOCAL)
-				pch := lm[i.Id]
-				pch <- i
-			} else if i.Type == message.Message_HTTP_SERVICE_UNAVAILABLE {
+				s := lconn[i.Id]
+				go s.proxyReader(outputCh)
+				s.proxyWriterCh <- i
+			} else if i.Type == message.Message_DIRECT_CONNECTED {
 				// Local initiated
-				delete(lcm, i.Id)
-				pch := lm[i.Id]
-				delete(lm, i.Id)
+				s := lconn[i.Id]
+				go s.proxyReader(outputCh)
+				s.proxyWriterCh <- i
+			} else if i.Type == message.Message_SERVICE_UNAVAILABLE {
+				// Local initiated
+				pch := lconn[i.Id].proxyWriterCh
+				delete(lconn, i.Id)
 				pch <- i
 			} else {
-				var m map[int32]chan<- *message.Message
+				var m map[uint32]*session
 				if i.Origin == message.Message_ORIGIN_LOCAL {
 					// Received from other side with local origin. Use remote map
-					m = rm
+					m = rconn
 				} else {
-					m = lm
+					m = lconn
 				}
-				pch := m[i.Id]
+				pch := m[i.Id].proxyWriterCh
 				if i.Type == message.Message_DISCONNECTED {
 					delete(m, i.Id)
 				}
 				pch <- i
 			}
-		case co := <-coch:
-			// Find next available id
+		case s := <-tn.initiateSessionCh:
+			// Find next available id.
 			used := true
 			for i := int32(0); i < math.MaxInt32; i++ {
-				if _, used = lm[id+i]; !used {
-					id = id + i
+				availableId++
+				if _, used = lconn[availableId]; !used {
 					break
 				}
 			}
 			if used {
+				s.conn.Write([]byte("HTTP/1.1 429 Too Many Requests\r\n\r\n"))
+				s.conn.Close()
 				logf("Too many connections")
-				return
+				continue
 			}
-			// New connection from local
-			lcm[id] = co.Conn
-			pch := make(chan *message.Message)
-			lm[id] = pch
-			go proxyWriter(co.Conn, pch, id)
+			// Setup session
+			s.id = availableId
+			s.proxyWriterCh = make(chan *message.Message)
+			lconn[s.id] = s
+			go s.proxyWriter()
 
-			och <- &message.Message{
-				Type:          message.Message_HTTP_CONNECT,
-				Id:            id,
-				SocketAddress: co.Address,
+			if s.isProxyConnect {
+				outputCh <- &message.Message{Id: s.id, Type: message.Message_PROXY_CONNECT, Address: s.remoteAddress}
+			} else {
+				outputCh <- &message.Message{Id: s.id, Type: message.Message_DIRECT_CONNECT}
 			}
-			id++
 		}
 	}
 }
@@ -297,26 +409,29 @@ func tunnelWriter(ctx context.Context, c Framer, och <-chan *message.Message) {
 		case co, ok := <-och:
 			if !ok {
 				logf("tunnelWriter channel closed")
+				c.Close(nil)
 				return
 			}
-			var data []byte
 			data, err := proto.Marshal(co)
 			if err != nil {
 				logf("tunnelWriter marshal error: %v", err)
+				c.Close(err)
 				return
 			}
 			if err = c.Write(data); err != nil {
 				logf("tunnelWriter write error: %v", err)
+				c.Close(err)
 				return
 			}
 		case <-ctx.Done():
+			c.Close(ctx.Err())
 			return
 		}
 	}
 }
 
 // Read commands comming from the other side of the tunnel
-func tunnelReader(c Framer, ich chan<- *message.Message) {
+func tunnelReader(c Framer, inputCh chan<- *message.Message) {
 	logf("tunnelReader starts")
 	defer logf("tunnelReader ends")
 	var err error
@@ -330,38 +445,35 @@ func tunnelReader(c Framer, ich chan<- *message.Message) {
 		if err = proto.Unmarshal(buf, co); err != nil {
 			break
 		}
-		ich <- co
+		inputCh <- co
 	}
 	if err == io.EOF {
-		logf("tunnelReader disconnected")
+		logf("tunnelReader disconnected remotely")
+		c.Close(err)
+	} else if strings.Contains(err.Error(), "use of closed network connection") {
+		// Connection closed locally. No need to close it again
+		logf("tunnelReader disconnected locally")
 	} else {
 		logf("tunnelReader error: %v", err)
+		c.Close(err)
 	}
-	c.Close(err)
 }
 
-// TunnelServe starts the communication with the remote side with tunnel messages connection c.
-// It handles new proxy connections coming into connection channel cch.
-func TunnelServe(ctx context.Context, c Framer, coch <-chan ConnectOperation) {
+// Serve starts the tunnel communication with the remote side. This blocks until connection is closed or context is cancelled.
+func (tn *Tunnel) Serve(ctx context.Context, c Framer) {
 	logf("TunnelServe starts")
 	defer logf("TunnelServe ends")
 
-	ich := make(chan *message.Message)
-	och := make(chan *message.Message)
+	tn.initiateSessionCh = make(chan *session)
+	inputCh := make(chan *message.Message)
+	outputCh := make(chan *message.Message)
 
-	if coch == nil {
-		// Create an unused coch for mapper
-		coch = make(<-chan ConnectOperation)
-	}
-
-	ctx = context.WithValue(ctx, connectKey, c)
-
-	go mapper(ich, coch, och)
-	go tunnelWriter(ctx, c, och)
+	go tn.mapper(ctx, inputCh, outputCh)
+	go tunnelWriter(ctx, c, outputCh)
 	// This blocks until connection closed
-	tunnelReader(c, ich)
+	tunnelReader(c, inputCh)
 
-	close(ich)
+	close(inputCh)
 	// Don't close och, as mapper may still use it. Let GC takes care of it.
 	// Don't close coch, as proxyConnect may still use it. Let GC takes care of it.
 }
