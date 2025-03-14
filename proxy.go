@@ -189,10 +189,9 @@ func (s *session) proxyWriter() {
 		} else if co.Type == message.Message_SERVICE_UNAVAILABLE {
 			s.conn.Write([]byte("HTTP/1.1 503 Service Unavailable\r\n\r\n"))
 			logf("proxyWriter service unavailable. %s", s.String())
-			return
 		} else if co.Type == message.Message_DISCONNECTED {
 			logf("proxyWriter disconnected. %s", s.String())
-			return
+			// channel will be closed by mapper
 		} else if co.Type == message.Message_DATA {
 			s.conn.Write(co.Data)
 		}
@@ -204,7 +203,7 @@ func (s *session) String() string {
 }
 
 // proxyReader uses the origin to denote if it is handling a local initiated connection or a remote one
-func (s *session) proxyReader(och chan<- *message.Message) {
+func (s *session) proxyReader(outputCh chan<- *message.Message) {
 	logf("proxyReader starts. %s", s.String())
 	defer logf("proxyReader ends. %s", s.String())
 	var origin message.Message_Origin
@@ -230,7 +229,7 @@ func (s *session) proxyReader(och chan<- *message.Message) {
 				Origin: origin,
 				Id:     s.id,
 			}
-			och <- co
+			outputCh <- co
 			return
 		}
 
@@ -240,7 +239,7 @@ func (s *session) proxyReader(och chan<- *message.Message) {
 			Id:     s.id,
 			Data:   buf[0:len],
 		}
-		och <- co
+		outputCh <- co
 	}
 }
 
@@ -304,12 +303,14 @@ func (tn *Tunnel) mapper(ctx context.Context, inputCh <-chan *message.Message, o
 	lconn := make(map[uint32]*session)
 	rconn := make(map[uint32]*session)
 	defer func() {
-		// Channel closed. Clear connections
+		// Tunnel closed. Close sessions
 		for _, s := range lconn {
 			close(s.proxyWriterCh)
+			s.conn.Close()
 		}
 		for _, s := range rconn {
 			close(s.proxyWriterCh)
+			s.conn.Close()
 		}
 	}()
 
@@ -356,6 +357,7 @@ func (tn *Tunnel) mapper(ctx context.Context, inputCh <-chan *message.Message, o
 				pch := lconn[i.Id].proxyWriterCh
 				delete(lconn, i.Id)
 				pch <- i
+				close(pch)
 			} else {
 				var m map[uint32]*session
 				if i.Origin == message.Message_ORIGIN_LOCAL {
@@ -364,11 +366,12 @@ func (tn *Tunnel) mapper(ctx context.Context, inputCh <-chan *message.Message, o
 				} else {
 					m = lconn
 				}
-				pch := m[i.Id].proxyWriterCh
+				pwch := m[i.Id].proxyWriterCh
+				pwch <- i
 				if i.Type == message.Message_DISCONNECTED {
 					delete(m, i.Id)
+					close(pwch)
 				}
-				pch <- i
 			}
 		case s := <-tn.initiateSessionCh:
 			// Find next available id.
@@ -474,6 +477,6 @@ func (tn *Tunnel) Serve(ctx context.Context, c Framer) {
 	tunnelReader(c, inputCh)
 
 	close(inputCh)
-	// Don't close och, as mapper may still use it. Let GC takes care of it.
-	// Don't close coch, as proxyConnect may still use it. Let GC takes care of it.
+	// Don't close outputCh, as mapper may still use it. Let GC takes care of it.
+	// Don't close initiateSessionCh, as proxyConnect may still use it. Let GC takes care of it.
 }
