@@ -187,7 +187,7 @@ func (s *session) proxyWriter() {
 		} else if co.Type == message.Message_DIRECT_CONNECTED {
 			logf("proxyWriter direct connected. %s", s.String())
 		} else if co.Type == message.Message_SERVICE_UNAVAILABLE {
-			s.conn.Write([]byte("HTTP/1.1 503 Service Unavailable\r\n\r\n"))
+			s.conn.Write([]byte("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n"))
 			logf("proxyWriter service unavailable. %s", s.String())
 		} else if co.Type == message.Message_DISCONNECTED {
 			logf("proxyWriter disconnected. %s", s.String())
