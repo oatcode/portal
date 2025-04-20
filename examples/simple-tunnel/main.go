@@ -55,12 +55,14 @@ var client bool
 var server bool
 var tunnelAddress string
 var proxyAddress string
+var directAddress string
 
 func main() {
 	flag.BoolVar(&client, "client", false, "Run client")
 	flag.BoolVar(&server, "server", false, "Run server")
 	flag.StringVar(&tunnelAddress, "tunnelAddress", "", "Tunnel address [<ip>]:<port>")
 	flag.StringVar(&proxyAddress, "proxyAddress", "", "Proxy [<ip>]:<port>")
+	flag.StringVar(&directAddress, "directAddress", "", "Direct [<ip>]:<port>")
 	flag.Parse()
 
 	portal.Logf = log.Printf

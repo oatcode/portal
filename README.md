@@ -1,17 +1,12 @@
 # Portal
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/oatcode/portal.svg)](https://pkg.go.dev/github.com/oatcode/portal)
-[![Release](https://img.shields.io/github/v/release/oatcode/portal)](https://github.com/oatcode/portal/releases)
+## Experimental branch for HTTP termination
 
-
-A Go implementation of HTTP tunneling through a tunnel
 
 # Overview
 
 The main goal of this project is to provide access from cloud to on-prem without opening ports on-prem. This library provides a mechanism to build a 2-node HTTP tunnel.
 
-The tunnel has two sides: client and server.
-An on-prem application running tunnel client will connect to tunnel server running in cloud. Proxy port can be opened on cloud side to allow access to on-prem via HTTP tunnelling: <https://en.wikipedia.org/wiki/HTTP_tunnel>
 
                    +---------+
                    | Cloud   |
@@ -19,7 +14,7 @@ An on-prem application running tunnel client will connect to tunnel server runni
                    | Client  |
                    +----+----+
                         |
-                        | proxy
+                        | HTTP/WS
                 +-------v-------+
                 |               |
                 | Tunnel Server |
@@ -54,12 +49,14 @@ An on-prem application running tunnel client will connect to tunnel server runni
 
 Wrap the tunnel connection with Framer interface and use Serve:
 
-    tn := portal.Tunnel{}
+    tn := portal.Tunnel{
+        Client: // This http.Client for the tunnel client side only
+    }
     tn.Serve(ctx, framer)
 
 Framer interface is for reading and writing messages with boundaries (i.e. frame). The examples show a simple length/bytes and WebSocket framer.
 
-For incoming proxy connections, pass the processing to the tunnel with:
+For incoming HTTP/WS connections, pass the processing to the tunnel with:
 
-    tn.Hijack(w, r)
+    tn.ServeHTTP(w, r)
 
