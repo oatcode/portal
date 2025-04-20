@@ -12,6 +12,7 @@ import (
 var client bool
 var server bool
 var address string
+var directAddress string
 var proxyBasicAuth string
 var proxyBearerAuth string
 var tunnelBasicAuth string
@@ -24,6 +25,7 @@ func main() {
 	flag.BoolVar(&client, "client", false, "Run client")
 	flag.BoolVar(&server, "server", false, "Run server")
 	flag.StringVar(&address, "address", "", "Address [<hostname>]:<port>")
+	flag.StringVar(&directAddress, "directAddress", "", "Direct Address [<hostname>]:<port>")
 	flag.StringVar(&proxyBasicAuth, "proxyBasicAuth", "", "Proxy basic auth <username>:<password>")
 	flag.StringVar(&proxyBearerAuth, "proxyBearerAuth", "", "Proxy bearer token")
 	flag.StringVar(&tunnelBasicAuth, "tunnelBasicAuth", "", "Tunnel basic auth <username>:<password>")

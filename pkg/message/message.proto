@@ -6,13 +6,20 @@ option go_package = "pkg/message";
 
 message Message {
     enum Type {
-        PROXY_CONNECT = 0;
-        PROXY_CONNECTED = 1;
-        SERVICE_UNAVAILABLE = 2;
-        DISCONNECTED = 3;
-        DATA = 4;
-        DIRECT_CONNECT = 5;
-        DIRECT_CONNECTED = 6;
+        REQUEST_HEADER = 0;
+        BODY = 1;
+        RESPONSE_HEADER = 3;
+        SERVICE_UNAVAILABLE = 4;
+        ERROR = 5;
+        WS_CONNECT = 6;
+        WS_CONNECTED = 7;
+        WS_MSG_HEADER = 8;
+        WS_MSG_DATA = 9;
+        WS_CLOSE = 10;
+    }
+    enum WsMsgType {
+        TEXT = 0;
+        BINARY = 1;
     }
     enum Origin {
         ORIGIN_LOCAL = 0;
@@ -23,4 +30,19 @@ message Message {
     uint32 id = 3;
     string address = 4;
     bytes data = 5;
+    string method = 6;
+    string url = 7;
+    string proto = 8;
+    repeated Header headers = 9;
+    uint32 code = 10;
+    bool eof = 11;
+    int64 contentLength = 12;
+    WsMsgType wsMsgType = 13;
+    string message = 14;
+// TODO messsage for err
+}
+
+message Header {
+    string name = 1;
+    repeated string values = 2;
 }

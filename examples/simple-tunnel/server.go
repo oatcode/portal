@@ -15,7 +15,7 @@ type proxyConnectHandler struct{}
 
 func (h proxyConnectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if tunnel != nil {
-		tunnel.Hijack(w, r)
+		tunnel.ServeHTTP(w, r)
 	} else {
 		http.Error(w, "tunnel not available", http.StatusServiceUnavailable)
 		return

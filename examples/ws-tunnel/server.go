@@ -25,12 +25,9 @@ func (h *proxyConnectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if tunnel != nil {
-			if err := tunnel.Hijack(w, r); err != nil {
-				http.Error(w, err.Error(), http.StatusServiceUnavailable)
-			}
+			tunnel.ServeHTTP(w, r)
 		} else {
 			http.Error(w, "tunnel not available", http.StatusServiceUnavailable)
-			return
 		}
 	} else {
 		h.other.ServeHTTP(w, r)
@@ -59,13 +56,15 @@ func tunnelHandler(w http.ResponseWriter, r *http.Request) {
 // We need to re-send the request. The net.Conn to pass in has to be a special one.
 // It will replay the request method and header first then go back to the hijacked connection
 func directHandler(w http.ResponseWriter, r *http.Request) {
-	if !proxyAuth(r) {
-		http.Error(w, "proxy authentication failed", http.StatusUnauthorized)
-		return
-	}
+	log.Printf("directHandler: %s", r.URL.String())
+	// if !proxyAuth(r) {
+	// 	http.Error(w, "proxy authentication failed", http.StatusUnauthorized)
+	// 	return
+	// }
+	// log.Printf("directHandler authenticated: %s", r.URL.String())
 
 	if tunnel != nil {
-		tunnel.Hijack(w, r)
+		tunnel.ServeHTTP(w, r)
 	} else {
 		http.Error(w, "tunnel not available", http.StatusServiceUnavailable)
 		return

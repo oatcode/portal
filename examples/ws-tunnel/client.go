@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 
@@ -45,11 +46,20 @@ func dialAndServe(tlsConfig *tls.Config) {
 	log.Print("Tunnel client connected")
 
 	tn := portal.Tunnel{
-		// ConnectLocalHandler: func(ctx context.Context, sa string) (net.Conn, error) {
-		// 	return tls.Dial("tcp", "localhost:10003", &tls.Config{
-		// 		InsecureSkipVerify: true,
-		// 	})
-		// },
+		Client: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					log.Printf("ProxyConnect: %s", addr)
+					return net.Dial("tcp", directAddress)
+				},
+				DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					log.Printf("ProxyConnectTLS: %s", addr)
+					return tls.Dial("tcp", directAddress, &tls.Config{
+						InsecureSkipVerify: true,
+					})
+				},
+			},
+		},
 	}
 	tn.Serve(context.Background(), NewWebsocketFramer(c, address))
 }
