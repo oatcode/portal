@@ -11,8 +11,6 @@ message Message {
         SERVICE_UNAVAILABLE = 2;
         DISCONNECTED = 3;
         DATA = 4;
-        DIRECT_CONNECT = 5;
-        DIRECT_CONNECTED = 6;
     }
     enum Origin {
         ORIGIN_LOCAL = 0;
